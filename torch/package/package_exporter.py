@@ -10,6 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import (
     Any,
+    cast,
     BinaryIO,
     Callable,
     Dict,
@@ -18,13 +19,12 @@ from typing import (
     Sequence,
     Set,
     Union,
-    cast,
     DefaultDict,
+    Type,
 )
+from torch.types import Storage
 
 import torch
-from torch.serialization import location_tag, normalize_storage_type
-from torch.types import Storage
 from torch.utils.hooks import RemovableHandle
 
 from ._digraph import DiGraph
@@ -35,6 +35,9 @@ from ._stdlib import is_stdlib_module
 from .find_file_dependencies import find_files_source_depends_on
 from .glob_group import GlobGroup, GlobPattern
 from .importer import Importer, OrderedImporter, sys_importer
+from ._zip_file_torchscript import TorchScriptPackageZipFileWriter
+from ._zip_file import PackageZipFileWriter
+from torch.serialization import location_tag
 
 _gate_torchscript_serialization = True
 
@@ -186,6 +189,7 @@ class PackageExporter:
         self,
         f: Union[str, Path, BinaryIO],
         importer: Union[Importer, Sequence[Importer]] = sys_importer,
+        zip_file_reader_type: Type[PackageZipFileWriter] = TorchScriptPackageZipFileWriter
     ):
         """
         Create an exporter.
@@ -202,8 +206,11 @@ class PackageExporter:
         else:  # is a byte buffer
             self.buffer = f
 
-        self.zip_file = torch._C.PyTorchFileWriter(f)
-        self.zip_file.set_min_version(6)
+        self.zip_file = zip_file_reader_type(f)
+        assert isinstance(self.zip_file, TorchScriptPackageZipFileWriter)
+        self.script_module_serializer = torch._C.ScriptModuleSerializer(self.zip_file.zip_file_writer)
+        self.storage_context = self.script_module_serializer.storage_context()
+
         self._written_files: Set[str] = set()
 
         self.serialized_reduces: Dict[int, Any] = {}
@@ -214,8 +221,6 @@ class PackageExporter:
         # - Each directed edge (u, v) means u depends on v.
         # - Nodes may contain metadata that describe how to write the thing to the zipfile.
         self.dependency_graph = DiGraph()
-        self.script_module_serializer = torch._C.ScriptModuleSerializer(self.zip_file)
-        self.storage_context = self.script_module_serializer.storage_context()
 
         # These are OrderedDicts for compatibility with RemovableHandle.
         # Generic OrderedDict type annotations are not present until 3.7.
@@ -223,7 +228,6 @@ class PackageExporter:
         self._extern_hooks: OrderedDict = OrderedDict()
         self._mock_hooks: OrderedDict = OrderedDict()
         self._intern_hooks: OrderedDict = OrderedDict()
-
         if isinstance(importer, Importer):
             self.importer = importer
         else:
@@ -1037,12 +1041,12 @@ class PackageExporter:
                 ...
         """
         self._execute_dependency_graph()
-
         self.script_module_serializer.write_files()
         self._finalize_zip()
 
     def _finalize_zip(self):
         """Called at the very end of packaging to leave the zipfile in a closed but valid state."""
+        self.zip_file.close()
         del self.zip_file
         if self.buffer:
             self.buffer.flush()

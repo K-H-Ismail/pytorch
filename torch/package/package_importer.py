@@ -7,11 +7,12 @@ import os.path
 import types
 from contextlib import contextmanager
 from pathlib import Path
-from typing import cast, Any, BinaryIO, Callable, Dict, List, Optional, Union
+from typing import cast, Any, BinaryIO, Callable, Dict, List, Optional, Union, Type
 from weakref import WeakValueDictionary
 
 import torch
 from torch.serialization import _get_restore_location, _maybe_decode_ascii
+from ._directory_reader_torchscript import TorchScriptDirectoryReader
 
 from ._directory_reader import DirectoryReader
 from ._importlib import (
@@ -26,7 +27,8 @@ from ._package_unpickler import PackageUnpickler
 from .file_structure_representation import Directory, _create_directory_from_file_list
 from .glob_group import GlobPattern
 from .importer import Importer
-
+from ._zip_file import PackageZipFileReader
+from ._zip_file_torchscript import TorchScriptPackageZipFileReader
 
 class PackageImporter(Importer):
     """Importers allow you to load code written to packages by :class:`PackageExporter`.
@@ -49,19 +51,18 @@ class PackageImporter(Importer):
 
     def __init__(
         self,
-        file_or_buffer: Union[str, torch._C.PyTorchFileReader, Path, BinaryIO],
+        file_or_buffer: Union[str, torch._C.PyTorchFileReader, PackageZipFileReader, Path, BinaryIO],
         module_allowed: Callable[[str], bool] = lambda module_name: True,
+        zip_file_reader_type: Type[PackageZipFileReader] = TorchScriptPackageZipFileReader
     ):
         """Open ``file_or_buffer`` for importing. This checks that the imported package only requires modules
         allowed by ``module_allowed``
-
         Args:
             file_or_buffer: a file-like object (has to implement :meth:`read`, :meth:`readline`, :meth:`tell`, and :meth:`seek`),
                 a string, or an ``os.PathLike`` object containing a filename.
             module_allowed (Callable[[str], bool], optional): A method to determine if a externally provided module
                 should be allowed. Can be used to ensure packages loaded do not depend on modules that the server
                 does not support. Defaults to allowing anything.
-
         Raises:
             ImportError: If the package will use a disallowed module.
         """
@@ -72,13 +73,12 @@ class PackageImporter(Importer):
         elif isinstance(file_or_buffer, (Path, str)):
             self.filename = str(file_or_buffer)
             if not os.path.isdir(self.filename):
-                self.zip_reader = torch._C.PyTorchFileReader(self.filename)
+                self.zip_reader = zip_file_reader_type(self.filename)
             else:
-                self.zip_reader = DirectoryReader(self.filename)
+                self.zip_reader = TorchScriptDirectoryReader(self.filename)
         else:
             self.filename = "<binary>"
-            self.zip_reader = torch._C.PyTorchFileReader(file_or_buffer)
-
+            self.zip_reader = TorchScriptPackageZipFileReader(file_or_buffer)
         self.root = _PackageNode(None)
         self.modules = {}
         self.extern_modules = self._read_extern()
@@ -193,7 +193,7 @@ class PackageImporter(Importer):
                 tensor = self.zip_reader.get_storage_from_record(
                     ".data/" + name, size, dtype
                 )
-                if isinstance(self.zip_reader, torch._C.PyTorchFileReader):
+                if isinstance(self.zip_reader, TorchScriptPackageZipFileReader):
                     storage_context.add_storage(name, tensor)
                 storage = tensor.storage()
             loaded_storages[key] = restore_location(storage, location)
