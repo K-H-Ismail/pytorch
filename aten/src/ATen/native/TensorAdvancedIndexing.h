@@ -12,7 +12,7 @@ struct TensorIterator;
 
 namespace at { namespace native {
 
-enum class SCATTER_GATHER_OP: uint8_t {REDUCE_ADD, REDUCE_MULTIPLY};
+enum class SCATTER_GATHER_OP: uint8_t {REDUCE_ADD, REDUCE_MULTIPLY, REDUCE_MAXIMUM, REDUCE_MINIMUM, REDUCE_MEAN};
 
 using index_put_with_sort_fn = void(*)(Tensor &, const c10::List<c10::optional<Tensor>> &, const Tensor &, bool accumulate, bool unsafe);
 
