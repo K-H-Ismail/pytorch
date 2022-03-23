@@ -1,6 +1,5 @@
 import torch
 from ._zip_file import PackageZipFileReader, PackageZipFileWriter
-
 class TorchScriptPackageZipFileWriter(PackageZipFileWriter):
     """
     Class to allow PackageExporter to operate torchscript objects. This
@@ -24,8 +23,12 @@ class TorchScriptPackageZipFileReader(PackageZipFileReader):
     is a wrapper around the PyTorchReader class.
     """
 
-    def __init__(self, file_name):
-        self.zip_file_reader = torch._C.PyTorchFileReader(file_name)
+    def __init__(self, file_or_buffer):
+
+        if isinstance(file_or_buffer, torch._C.PyTorchFileReader):
+            self.zip_file_reader = file_or_buffer
+        else:
+            self.zip_file_reader = torch._C.PyTorchFileReader(file_or_buffer)
 
     def get_record(self, name):
         return self.zip_file_reader.get_record(name)
